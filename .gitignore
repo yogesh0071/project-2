@@ -1,0 +1,12 @@
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+
+inventory.ini
+*.pem
+k3s-kubeconfig-*.yaml
+
+__pycache__/
+*.pyc

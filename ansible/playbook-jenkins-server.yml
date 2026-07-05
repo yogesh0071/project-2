@@ -1,0 +1,94 @@
+---
+# Configures the Jenkins server: Java, Jenkins itself, Docker (so Jenkins can
+# build images), and the AWS CLI (so Jenkins can push to ECR).
+
+- name: Configure Jenkins CI server
+  hosts: jenkins_server
+  become: true
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install Java 21 (required by modern Jenkins)
+      apt:
+        name: openjdk-21-jre
+        state: present
+
+    - name: Remove old keyring file if present from a prior failed run
+      file:
+        path: /usr/share/keyrings/jenkins-keyring.asc
+        state: absent
+
+    - name: Download and dearmor Jenkins GPG key
+      shell: |
+        curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key | gpg --dearmor -o /usr/share/keyrings/jenkins-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/jenkins-keyring.gpg
+
+    - name: Add Jenkins apt repo with signed-by
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/jenkins-keyring.gpg] https://pkg.jenkins.io/debian-stable binary/"
+        state: present
+        filename: jenkins
+
+    - name: Install Jenkins
+      apt:
+        name: jenkins
+        state: present
+        update_cache: yes
+
+    - name: Install Docker (so Jenkins can build images)
+      shell: |
+        curl -fsSL https://get.docker.com | sh
+      args:
+        creates: /usr/bin/docker
+
+    - name: Add jenkins user to docker group
+      user:
+        name: jenkins
+        groups: docker
+        append: yes
+
+    - name: Install unzip (needed for AWS CLI install)
+      apt:
+        name: unzip
+        state: present
+
+    - name: Download AWS CLI v2
+      get_url:
+        url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+        dest: /tmp/awscliv2.zip
+      when: not (ansible_facts.packages is defined and 'awscli' in ansible_facts.packages)
+
+    - name: Unzip AWS CLI installer
+      unarchive:
+        src: /tmp/awscliv2.zip
+        dest: /tmp
+        remote_src: yes
+      args:
+        creates: /tmp/aws
+
+    - name: Install AWS CLI
+      command: /tmp/aws/install
+      args:
+        creates: /usr/local/bin/aws
+
+    - name: Restart Jenkins to apply docker group membership
+      systemd:
+        name: jenkins
+        state: restarted
+        enabled: yes
+
+    - name: Get initial Jenkins admin password
+      command: cat /var/lib/jenkins/secrets/initialAdminPassword
+      register: jenkins_password
+      changed_when: false
+
+    - name: Show initial admin password
+      debug:
+        msg: >
+          Jenkins is up. Visit http://{{ inventory_hostname }}:8080 and use
+          this initial admin password: {{ jenkins_password.stdout }}

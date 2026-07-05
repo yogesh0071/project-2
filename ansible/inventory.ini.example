@@ -1,0 +1,12 @@
+# Copy to inventory.ini and fill in the IPs from `terraform output` after apply.
+# Do not commit inventory.ini with real IPs/keys to a public repo.
+
+[app_server]
+APP_SERVER_PUBLIC_IP ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/your-key.pem
+
+[jenkins_server]
+JENKINS_SERVER_PUBLIC_IP ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/your-key.pem
+
+[all:vars]
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'

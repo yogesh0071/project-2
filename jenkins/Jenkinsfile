@@ -1,0 +1,90 @@
+// Jenkins pipeline: build -> push to ECR -> deploy to k3s via Helm
+//
+// Required Jenkins config before this will run:
+//  1. Jenkins credentials: "kubeconfig" (Secret file) - the app server's kubeconfig
+//  2. AWS CLI configured on the Jenkins server with a role/credentials that
+//     can push to ECR (handled by the IAM instance profile if running on the
+//     jenkins EC2 instance Terraform created - no static keys needed)
+//  3. Helm and kubectl installed on the Jenkins agent (or use the app server
+//     as a remote target via kubeconfig, as this pipeline does)
+
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION      = 'ap-south-1'
+        ECR_REPO_URL    = 'REPLACE_WITH_ECR_REPO_URL'   // from `terraform output ecr_repository_url`
+        IMAGE_TAG       = "${env.BUILD_NUMBER}"
+        APP_DIR         = 'app'
+        HELM_CHART_DIR  = 'helm/app-chart'
+        HELM_RELEASE    = 'devops-demo'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir("${APP_DIR}") {
+                    sh "docker build -t ${ECR_REPO_URL}:${IMAGE_TAG} ."
+                }
+            }
+        }
+
+        stage('Login to ECR') {
+            steps {
+                sh """
+                    aws ecr get-login-password --region ${AWS_REGION} \
+                    | docker login --username AWS --password-stdin ${ECR_REPO_URL}
+                """
+            }
+        }
+
+        stage('Push Image to ECR') {
+            steps {
+                sh "docker push ${ECR_REPO_URL}:${IMAGE_TAG}"
+            }
+        }
+
+        stage('Deploy to k3s via Helm') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE')]) {
+                    sh """
+                        export KUBECONFIG=${KUBECONFIG_FILE}
+                        helm upgrade --install ${HELM_RELEASE} ${HELM_CHART_DIR} \
+                          --set image.repository=${ECR_REPO_URL} \
+                          --set image.tag=${IMAGE_TAG} \
+                          --wait --timeout 120s
+                    """
+                }
+            }
+        }
+
+        stage('Verify Rollout') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE')]) {
+                    sh """
+                        export KUBECONFIG=${KUBECONFIG_FILE}
+                        kubectl rollout status deployment/${HELM_RELEASE}-app --timeout=90s
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployed build ${IMAGE_TAG} successfully."
+        }
+        failure {
+            echo "Pipeline failed - check stage logs above."
+        }
+        always {
+            sh "docker image prune -f"
+        }
+    }
+}

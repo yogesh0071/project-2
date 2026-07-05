@@ -1,0 +1,71 @@
+---
+# Configures the app server: installs Docker (for building/testing locally
+# if needed) and k3s (lightweight Kubernetes - avoids EKS cost and complexity
+# while still giving real kubectl/Helm experience).
+
+- name: Configure k3s app server
+  hosts: app_server
+  become: true
+  vars:
+    k3s_version: "v1.29.4+k3s1"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install prerequisite packages
+      apt:
+        name:
+          - curl
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Install Docker
+      shell: |
+        curl -fsSL https://get.docker.com | sh
+      args:
+        creates: /usr/bin/docker
+
+    - name: Add ubuntu user to docker group
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
+
+    - name: Install k3s (server/control-plane mode)
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} sh -s - \
+          --write-kubeconfig-mode 644
+      args:
+        creates: /usr/local/bin/k3s
+
+    - name: Wait for k3s node to be ready
+      shell: /usr/local/bin/k3s kubectl get nodes
+      register: k3s_nodes
+      until: "'Ready' in k3s_nodes.stdout"
+      retries: 10
+      delay: 10
+
+    - name: Install Helm
+      shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Fetch kubeconfig to local machine for kubectl/Helm use from your laptop
+      fetch:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "./k3s-kubeconfig-{{ inventory_hostname }}.yaml"
+        flat: yes
+
+    - name: Show reminder to fix kubeconfig server address
+      debug:
+        msg: >
+          Kubeconfig fetched to ./k3s-kubeconfig-{{ inventory_hostname }}.yaml.
+          Edit it and replace 'https://127.0.0.1:6443' with
+          'https://{{ inventory_hostname }}:6443' before using it locally.
